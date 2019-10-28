@@ -1,18 +1,20 @@
 /*
  * author: Sharanya Sudhakar
- * Round Robin Scheduling Alogorithm with
- * resume() and suspend()
+ * Multi Level Feedback Queue
  *
  */
  
 import java.util.*;
+/*
+ *Enum to manage multilevel queue.
+ */
+enum Queue {ZERO, ONE, TWO;}
 
 public class Scheduler extends Thread
 {
-	/*
-	 TCB - Thread Control BlockView
-	 */
-    private Vector queue;//list of active threads
+	//TCB - Thread Control BlockView
+
+    private Vector queue_0, queue_1, queue_2;//list of active threads one for each level.
     private int timeSlice; // time slice allocated to each thread
     private static final int DEFAULT_TIME_SLICE = 1000; // 1 sec default timeslice
 
@@ -27,14 +29,18 @@ public class Scheduler extends Thread
 	 public Scheduler( ) 
 	{
 		timeSlice = DEFAULT_TIME_SLICE;
-		queue = new Vector( );
+		queue_0 = new Vector( );
+		queue_1 = new Vector( );
+		queue_2 = new Vector( );
 		initTid( DEFAULT_MAX_THREADS );
     }
 
     public Scheduler( int quantum ) 
 	{
 		timeSlice = quantum;
-		queue = new Vector( );
+		queue_0 = new Vector( );
+		queue_1 = new Vector( );
+		queue_2 = new Vector( );
 		initTid( DEFAULT_MAX_THREADS );
     }
 	
@@ -76,7 +82,20 @@ public class Scheduler extends Thread
 
     // A new feature added to p161 
     // Retrieve the current thread's TCB from the queue
-    public TCB getMyTcb( ) 
+    public TCB getMyTcb() 
+	{
+		TCB tcb = findTcb(queue_0);
+		if(tcb==null)
+		{
+			tcb = findTcb(queue_1);
+			if(tcb == null)
+				tcb = findTcb(queue_2);
+		}
+		return tcb;
+    }
+
+	// helper function for getMyTcb
+	private TCB findTcb(Vector queue)
 	{
 		Thread myThread = Thread.currentThread( ); // Get my thread object
 		synchronized( queue ) 
@@ -90,7 +109,7 @@ public class Scheduler extends Thread
 			}
 		}
 		return null;
-    }
+	}
 
     // A new feature added to p161 
     // Return the maximal number of threads to be spawned in the system
@@ -104,7 +123,9 @@ public class Scheduler extends Thread
     public Scheduler( int quantum, int maxThreads ) 
 	{
 		timeSlice = quantum;
-		queue = new Vector( );
+		queue_0 = new Vector( );
+		queue_1 = new Vector( );
+		queue_2 = new Vector( );
 		initTid( maxThreads );
     }
 
@@ -120,13 +141,13 @@ public class Scheduler extends Thread
     // A modified addThread of p161 example
     public TCB addThread( Thread t ) 
 	{
-		TCB parentTcb = getMyTcb( ); // get my TCB and find my TID
+		TCB parentTcb = getMyTcb(); // get my TCB and find my TID
 		int pid = ( parentTcb != null ) ? parentTcb.getTid( ) : -1;
 		int tid = getNewTid( ); // get a new TID
 		if ( tid == -1)
 			return null;
 		TCB tcb = new TCB( t, tid, pid ); // create a new TCB
-		queue.add( tcb );
+		queue_0.add( tcb );// always add to first queue.
 		return tcb;
     }
 
@@ -149,22 +170,19 @@ public class Scheduler extends Thread
 		} 
 		catch ( InterruptedException e ) { }
     }
-    
-    // A modified run of p161
-    public void run( ) 
+
+	//thread process of the queues
+	private void processQueue(Vector queue,Queue num)
 	{
-		System.out.println("\n********** Sharanya's Scheduler 1 *************\n");
 		Thread current = null;
-	
-		while ( true ) 
-		{
-			try 
-			{
-			// get the next TCB and its thread
-			//check for any active threads
-			//if active threads are empty continue
-			if ( queue.size( ) == 0 )
-				continue;
+		
+		// get the next TCB and its thread
+		//check for any active threads
+		//if active threads are empty continue
+		if ( queue.size( ) == 0 )
+			return;
+		while (queue.size() > 0)
+        {
 			TCB currentTCB = (TCB)queue.firstElement( ); // at index 0
 			if ( currentTCB.getTerminated( ) == true ) //if thread is terminated remove from queue and continue
 			{
@@ -173,23 +191,81 @@ public class Scheduler extends Thread
 				continue;
 			}
 			current = currentTCB.getThread( );//from TCB block get thread
-				if ( current != null ) 
-				{
-					current.resume();
-					if (! current.isAlive( ) )
-						current.start( ); 
-				}
+			if ( current != null ) 
+			{
+				current.resume();
+				if (! current.isAlive( ) )
+					current.start( ); 
+			}
 		
-			schedulerSleep( );
-			// System.out.println("* * * Context Switch * * * ");
+			manageML(current,num);
 
-				synchronized ( queue ) 
+			synchronized ( queue ) 
+			{
+				if ( current != null && current.isAlive( ) )
+				current.suspend();
+				queue.remove( currentTCB ); // rotate this TCB to the end
+				switch(num)
 				{
-					if ( current != null && current.isAlive( ) )
-					current.suspend();
-					queue.remove( currentTCB ); // rotate this TCB to the end
-					queue.add( currentTCB );
+					case ZERO:
+						queue_1.add( currentTCB );
+					break;
+					case ONE:
+					case TWO:
+						queue_2.add( currentTCB );
 				}
+			}
+		}
+	}
+
+	//helper function for processQueue, 
+	//it manages new threads in queue 0or1 when another queue is being processed.
+	private void manageML(Thread current, Queue num)
+	{
+		switch(num)
+		{
+			case ZERO:
+				sleepThread(timeSlice/2);
+			break;
+
+			case ONE:
+			case TWO:
+				sleepThread(timeSlice / 2);
+				if (queue_0.size() != 0)
+				{
+					// new threads in first queue
+					current.suspend();
+					processQueue(queue_0,Queue.ZERO);
+					current.resume();
+				}
+				sleepThread(timeSlice / 2);
+
+				if(num == Queue.TWO ) //only case two
+				{
+					if (queue_1.size() != 0)
+					{
+						// new threads in second queue
+						current.suspend();
+						processQueue(queue_1,Queue.ONE);
+						current.resume();
+					}
+					sleepThread(timeSlice);
+				}
+			break;
+		}
+	}
+    
+    // A modified run of p161
+    public void run( ) 
+	{
+		System.out.println("\n********** Sharanya's Scheduler 2 - MFQS *************\n");
+		while ( true ) 
+		{
+			try 
+			{
+				processQueue(queue_0,Queue.ZERO);
+				processQueue(queue_1,Queue.ONE);
+				processQueue(queue_2,Queue.TWO);
 			} 
 			catch ( NullPointerException e3 ) { };
 		}
