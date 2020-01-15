@@ -17,7 +17,7 @@ using namespace std;
 int main(int argc, char *argv[]) 
 {
 
-	int status, fd1[1], fd2[2];
+	int status, fd1[2], fd2[2];
 	int pid; //use same pid for every fork?
 
 	//fork before initializing pipes.
